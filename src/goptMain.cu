@@ -7,16 +7,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "individual.h"
+
 
 // For the CUDA runtime routines (prefixed with "cuda_")
 #include <cuda_runtime.h>
 #include <curand.h>
 #include <curand_kernel.h>
+#include "individual.h"
 
 /* this GPU kernel function is used to initialize the random states */
 
-__global__ void init(unsigned int seed, Individual *I, int chromosomeLength,
+__global__ void init(unsigned int seed, Individual *I,
 		int numElements)
 		{
 	int c = blockDim.x * blockIdx.x + threadIdx.x;
@@ -33,7 +34,7 @@ __global__ void shake(Individual *I, int chromosomeLength, int numElements) {
 	int c = blockDim.x * blockIdx.x + threadIdx.x;
 
 	if (c < numElements) {
-		curandState_t state = I[c].state;
+		curandState_t* state = &I[c].state;
 		for (int m = 0; m < 1; m++) {
 			int i = curand(state) % chromosomeLength;
 			int j = curand(state) % chromosomeLength;
@@ -46,13 +47,14 @@ __global__ void shake(Individual *I, int chromosomeLength, int numElements) {
 
 }
 
-__global__ void mutateAndScore(curandState_t* states, Individual *I,
+__global__ void mutateAndScore(Individual *I,
 		bool justMutate, int chromosomeLength, int numElements) {
 	int c = blockDim.x * blockIdx.x + threadIdx.x;
 
 	if (c < numElements) {
-		int i = curand(&states[blockIdx.x]) % chromosomeLength;
-		int j = curand(&states[blockIdx.x]) % chromosomeLength;
+		curandState_t* state = &I[c].state;
+		int i = curand(state) % chromosomeLength;
+		int j = curand(state) % chromosomeLength;
 		int temp = I[c].chromosome[i];
 		I[c].chromosome[i] = I[c].chromosome[j];
 		I[c].chromosome[j] = temp;
@@ -64,7 +66,7 @@ __global__ void mutateAndScore(curandState_t* states, Individual *I,
 
 }
 
-void initGPURandoms(int num) {
+void initGPURandoms(int num, Individual *I, int numElements) {
 	/*
 	 * For each core initialize a random state, and return this block of states
 	 */
@@ -75,7 +77,7 @@ void initGPURandoms(int num) {
 	cudaMalloc((void**) &states, num * sizeof(curandState_t));
 
 	/* invoke the GPU to initialize all of the random states */
-	init<<<num, 1>>>(time(0), states);
+	init<<<num, 1>>>(time(0), I, numElements);
 
 	err = cudaGetLastError();
 
@@ -117,7 +119,7 @@ int main(void) {
 		exit(EXIT_FAILURE);
 	}
 
-	fprintf(stdout, "Allocated %d individuals for a population size of %lu\n",
+	fprintf(stdout, "Allocated %d individuals for a population size of %u\n",
 			numIndividuals, allIndividualsSize);
 
 // Initialize the host input vectors
@@ -160,11 +162,11 @@ int main(void) {
 	printf("CUDA kernel launch with %d blocks of %d threads\n", blocksPerGrid,
 			threadsPerBlock);
 
-	initGPURandoms(blocksPerGrid);
-	shake<<<blocksPerGrid, threadsPerBlock>>>(states, d_I, chromosomeLength,
+	initGPURandoms(blocksPerGrid, d_I, numIndividuals);
+	shake<<<blocksPerGrid, threadsPerBlock>>>(d_I, chromosomeLength,
 			numIndividuals);
 
-	mutateAndScore<<<blocksPerGrid, threadsPerBlock>>>(states, d_I, true,
+	mutateAndScore<<<blocksPerGrid, threadsPerBlock>>>( d_I, true,
 			chromosomeLength, numIndividuals);
 
 	err = cudaGetLastError();
