@@ -8,16 +8,17 @@
 #ifndef INDIVIDUAL_H_
 #define INDIVIDUAL_H_
 
-struct Individual
+struct coord2D
 {
+	long x;
+	long y;
+};
+
+struct Individual {
 	int id;
 	curandState_t state;
 	double fitness;
-	int chromosome[128];
+	coord2D chromosome[128];
 };
-
-
-
-
 
 #endif /* INDIVIDUAL_H_ */
