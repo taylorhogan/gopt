@@ -45,7 +45,7 @@ __global__ void shake(Individual *I, int chromosomeLength, int numElements)
 	if (c < numElements)
 	{
 		curandState_t* state = &I[c].state;
-		for (int m = 0; m < chromosomeLength*2; m++)
+		for (int m = 0; m < chromosomeLength * 2; m++)
 		{
 			int i = curand(state) % chromosomeLength;
 			int j = curand(state) % chromosomeLength;
@@ -54,9 +54,8 @@ __global__ void shake(Individual *I, int chromosomeLength, int numElements)
 			long y = I[c].chromosome[i].y;
 			I[c].chromosome[i].x = I[c].chromosome[j].x;
 			I[c].chromosome[i].y = I[c].chromosome[j].y;
-			I[c].chromosome[j].x=x;
-			I[c].chromosome[j].y=y;
-
+			I[c].chromosome[j].x = x;
+			I[c].chromosome[j].y = y;
 
 		}
 
@@ -71,7 +70,16 @@ __global__ void fitness(Individual *I, int chromosomeLength, int numElements)
 
 	if (c < numElements)
 	{
-		I[c].fitness = 0;
+		double d = 0;
+		for (int i = 0; i < (chromosomeLength - 1); i++)
+		{
+			double dx = (I[c].chromosome[i].x - I[c].chromosome[i + 1].x);
+			double dy = (I[c].chromosome[i].y - I[c].chromosome[i + 1].y);
+			d += (abs(dx) + abs(dy));
+
+		}
+		I[c].fitness = -d;
+
 	}
 }
 
@@ -84,9 +92,13 @@ __global__ void mutate(Individual *I, int chromosomeLength, int numElements)
 		curandState_t* state = &I[c].state;
 		int i = curand(state) % chromosomeLength;
 		int j = curand(state) % chromosomeLength;
-		coord2D temp = I[c].chromosome[i];
-		I[c].chromosome[i] = I[c].chromosome[j];
-		I[c].chromosome[j] = temp;
+		long x = I[c].chromosome[i].x;
+		long y = I[c].chromosome[i].y;
+		I[c].chromosome[i].x = I[c].chromosome[j].x;
+		I[c].chromosome[i].y = I[c].chromosome[j].y;
+		I[c].chromosome[j].x = x;
+		I[c].chromosome[j].y = y;
+		I[c].id = I[c].id + numElements;
 
 	}
 
@@ -118,67 +130,56 @@ int individualCompare(const void * a, const void * b)
 		return 0;
 }
 
-Individual *mergePopulations(Individual *current, Individual *next,
-		int populationSize, size_t individualSize)
-{
-	struct Individual *total = (struct Individual *) malloc(populationSize * 2);
-
-	memcpy(total, current, populationSize);
-	memcpy(total + populationSize, next, populationSize);
-
-	return total;
-}
-
-Individual* best(Individual *current, Individual *next, int populationSize,
-		size_t individualSize)
+void best(Individual *current, Individual *next, size_t populationSizeInBytes,
+		size_t individualSizeInBytes, int populationSize)
 {
 
-	Individual *total = mergePopulations(current, next, populationSize,
-			individualSize);
+	struct Individual *total = (struct Individual *) malloc(
+			populationSizeInBytes * 2);
 
-	qsort(total, populationSize * 2, individualSize, individualCompare);
+	memcpy(total, current, populationSizeInBytes);
+	memcpy(total + populationSize, next, populationSizeInBytes);
 
-	return total;
+	qsort(total, populationSize * 2, individualSizeInBytes, individualCompare);
+	memcpy(current, total, populationSizeInBytes);
+	free(total);
 
 }
 
- void evolve (Individual *curGenerationLocal,
-		Individual *curGenerationOnGPU, int chromosomeLength,
-		int populationSize, size_t populationSizeInBytes, int blocksPerGrid,
-		int threadsPerBlock, unsigned long generations)
+void evolve(Individual *curGenerationLocal, Individual *curGenerationOnGPU,
+		int chromosomeLength, int populationSize, size_t populationSizeInBytes,
+		int blocksPerGrid, int threadsPerBlock, unsigned long generations)
 {
 
-	return;
-
-/*
+	// At this point the contents and fitness should be equal between the GPU and Host verstions
 	for (unsigned long generation = 0; generation < generations; generation++)
 	{
-		fprintf(stdout, "1");
-		// mutate population on GPU
+
+		// Mutate and perform fitness on GPU copy
 		mutate<<<blocksPerGrid, threadsPerBlock>>>(curGenerationOnGPU,
 				chromosomeLength, populationSize);
-		fprintf(stdout, "2");
-		// copy mutated population to local
+
+		fitness<<<blocksPerGrid, threadsPerBlock>>>(curGenerationOnGPU,
+				chromosomeLength, populationSize);
+
+		// copy GPU to newGeneration local
 		struct Individual *newGenerationLocal = (struct Individual *) malloc(
 				populationSizeInBytes);
-		fprintf(stdout, "3");
-		gpuErrchk(
-				cudaMemcpy(newGenerationLocal, curGenerationOnGPU,
-						populationSizeInBytes, cudaMemcpyDeviceToHost));
-		fprintf(stdout, "4");
-		// find the best of the old and mutated
-		Individual* nextGenerationLocal = best(curGenerationLocal,
-				newGenerationLocal, populationSizeInBytes, populationSize);
-		fprintf(stdout, "5");
-		curGenerationLocal = newGenerationLocal;
-		fprintf(stdout, "6");
-		gpuErrchk(
-				cudaMemcpy(curGenerationOnGPU, curGenerationLocal,
-						populationSizeInBytes, cudaMemcpyHostToDevice));
-		fprintf(stdout, "7");
+
+		cudaMemcpy(newGenerationLocal, curGenerationOnGPU,
+				populationSizeInBytes, cudaMemcpyDeviceToHost);
+
+
+		best(curGenerationLocal,
+				newGenerationLocal, populationSizeInBytes, sizeof (Individual), populationSize);
+
+		cudaMemcpy(curGenerationOnGPU, curGenerationLocal,
+				populationSizeInBytes, cudaMemcpyHostToDevice);
+
+
 	}
 
-	*/
+	printPopulation (curGenerationLocal, 3, 10);
 
 }
 
@@ -199,19 +200,18 @@ void makeFirstIndividuals(Individual *population, int poulationSize,
 }
 int main(void)
 {
-// Error code to check return values for CUDA calls
+	// Error code to check return values for CUDA calls
 	cudaError_t err = cudaSuccess;
 
-// Print the vector length to be used, and compute its size
-	int chromosomeLength = 128;
-	int poulationSize = 10;
+	// Print the vector length to be used, and compute its size
+	int chromosomeLength = 512;
+	int poulationSize = 256;
 
 	size_t individualSizeInBytes = sizeof(struct Individual);
 	size_t populationSizeInBytes = individualSizeInBytes * poulationSize;
 
 	struct Individual *h_I = (struct Individual *) malloc(
-			populationSizeInBytes );
-
+			populationSizeInBytes);
 
 	if (h_I == NULL)
 	{
@@ -220,31 +220,27 @@ int main(void)
 	}
 	printf("allocated population size of %ul", populationSizeInBytes);
 
-
 	fprintf(stdout, "Allocated %d individuals for a population size of %lu\n",
 			poulationSize, (unsigned long) populationSizeInBytes);
 
-// Initialize the host input vectors
+	// Initialize the host input vectors
 	makeFirstIndividuals(h_I, poulationSize, chromosomeLength);
 
 	printPopulation(h_I, 3, 10);
 
-// Allocate the device output vector C
+	// Allocate the device output vector C
 	Individual *d_I = NULL;
-	err = cudaMalloc((void ** ) &d_I, populationSizeInBytes);
+	err = cudaMalloc((void **) &d_I, populationSizeInBytes);
 	if (err != cudaSuccess)
-		{
-			fprintf(stderr,
-					"Failed to copy vector C from device to host (error code %s)!\n",
-					cudaGetErrorString(err));
-			exit(EXIT_FAILURE);
-		}
+	{
+		fprintf(stderr,
+				"Failed to copy vector C from device to host (error code %s)!\n",
+				cudaGetErrorString(err));
+		exit(EXIT_FAILURE);
+	}
 
-
-// Copy the host input vectors A and B in host memory to the device input vectors in
-// device memory
-	printf("Copy input data from the host memory to the CUDA device\n");
-
+	// Copy the host input vectors A and B in host memory to the device input vectors in
+	// device memory
 	err = cudaMemcpy(d_I, h_I, populationSizeInBytes, cudaMemcpyHostToDevice);
 	if (err != cudaSuccess)
 	{
@@ -254,18 +250,14 @@ int main(void)
 		exit(EXIT_FAILURE);
 	}
 
-// Launch the Vector Add CUDA Kernel
+	// Launch the Vector Add CUDA Kernel
 	int threadsPerBlock = 256;
 	int blocksPerGrid = (poulationSize + threadsPerBlock - 1) / threadsPerBlock;
 	printf("CUDA kernel launch with %d blocks of %d threads\n", blocksPerGrid,
 			threadsPerBlock);
 
-
-	evolve(h_I, d_I, chromosomeLength, poulationSize, populationSizeInBytes,
-			blocksPerGrid, threadsPerBlock, 1);
-
 	initRandomVariableInChromosome<<<blocksPerGrid, threadsPerBlock>>>(time(0),
-	d_I, poulationSize);
+			d_I, poulationSize);
 
 	fprintf(stdout, "2");
 	err = cudaGetLastError();
@@ -280,14 +272,18 @@ int main(void)
 
 	shake<<<blocksPerGrid, threadsPerBlock>>>(d_I, chromosomeLength,
 			poulationSize);
+
+	fitness<<<blocksPerGrid, threadsPerBlock>>>(d_I,
+			chromosomeLength, poulationSize);
+
+	err = cudaMemcpy(h_I, d_I, populationSizeInBytes, cudaMemcpyDeviceToHost);
 	gpuErrchk(cudaGetLastError());
 
-	//evolve(h_I, d_I, chromosomeLength, poulationSize, populationSizeInBytes,
-			//blocksPerGrid, threadsPerBlock, 1);
+	evolve(h_I, d_I, chromosomeLength, poulationSize, populationSizeInBytes,
+			blocksPerGrid, threadsPerBlock, 10000);
 
-
-// Copy the device result vector in device memory to the host result vector
-// in host memory.
+	// Copy the device result vector in device memory to the host result vector
+	// in host memory.
 	printf("Copy output data from the CUDA device to the host memory\n");
 	err = cudaMemcpy(h_I, d_I, populationSizeInBytes, cudaMemcpyDeviceToHost);
 
@@ -299,11 +295,11 @@ int main(void)
 		exit(EXIT_FAILURE);
 	}
 
-	printPopulation(h_I, 3, 10);
+
 
 	printf("Test PASSED\n");
 
-// Free device global memory
+	// Free device global memory
 	err = cudaFree(d_I);
 
 	if (err != cudaSuccess)
@@ -313,7 +309,7 @@ int main(void)
 		exit(EXIT_FAILURE);
 	}
 
-// Free host memory
+	// Free host memory
 	free(h_I);
 
 	printf("Done\n");
