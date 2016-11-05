@@ -45,13 +45,19 @@ __global__ void shake(Individual *I, int chromosomeLength, int numElements)
 	if (c < numElements)
 	{
 		curandState_t* state = &I[c].state;
-		for (int m = 0; m < 100; m++)
+		for (int m = 0; m < chromosomeLength*2; m++)
 		{
 			int i = curand(state) % chromosomeLength;
 			int j = curand(state) % chromosomeLength;
-			coord2D temp = I[c].chromosome[i];
-			I[c].chromosome[i] = I[c].chromosome[j];
-			I[c].chromosome[j] = temp;
+
+			long x = I[c].chromosome[i].x;
+			long y = I[c].chromosome[i].y;
+			I[c].chromosome[i].x = I[c].chromosome[j].x;
+			I[c].chromosome[i].y = I[c].chromosome[j].y;
+			I[c].chromosome[j].x=x;
+			I[c].chromosome[j].y=y;
+
+
 		}
 
 	}
@@ -93,7 +99,8 @@ void printPopulation(Individual *list, int n, int l)
 		fprintf(stdout, "%d  %lf ", list[i].id, list[i].fitness);
 		for (int j = 0; j < l; j++)
 		{
-			fprintf(stdout, "%(ld,%ld) ", list[i].chromosome[j].x,list[i].chromosome[j].y);
+			fprintf(stdout, "(%ld,%ld) ", list[i].chromosome[j].x,
+					list[i].chromosome[j].y);
 		}
 		fprintf(stdout, "\n");
 	}
@@ -135,54 +142,60 @@ Individual* best(Individual *current, Individual *next, int populationSize,
 
 }
 
-Individual *evolve(Individual *curGenerationLocal,
+ void evolve (Individual *curGenerationLocal,
 		Individual *curGenerationOnGPU, int chromosomeLength,
 		int populationSize, size_t populationSizeInBytes, int blocksPerGrid,
 		int threadsPerBlock, unsigned long generations)
 {
 
+	return;
+
+/*
 	for (unsigned long generation = 0; generation < generations; generation++)
 	{
+		fprintf(stdout, "1");
 		// mutate population on GPU
 		mutate<<<blocksPerGrid, threadsPerBlock>>>(curGenerationOnGPU,
 				chromosomeLength, populationSize);
-
+		fprintf(stdout, "2");
 		// copy mutated population to local
 		struct Individual *newGenerationLocal = (struct Individual *) malloc(
 				populationSizeInBytes);
-
-		gpuErrchk( cudaMemcpy(newGenerationLocal, curGenerationOnGPU,
+		fprintf(stdout, "3");
+		gpuErrchk(
+				cudaMemcpy(newGenerationLocal, curGenerationOnGPU,
 						populationSizeInBytes, cudaMemcpyDeviceToHost));
-
+		fprintf(stdout, "4");
 		// find the best of the old and mutated
 		Individual* nextGenerationLocal = best(curGenerationLocal,
 				newGenerationLocal, populationSizeInBytes, populationSize);
-
+		fprintf(stdout, "5");
 		curGenerationLocal = newGenerationLocal;
-;
-		gpuErrchk( cudaMemcpy(curGenerationOnGPU, curGenerationLocal,
-								populationSizeInBytes, cudaMemcpyHostToDevice));
+		fprintf(stdout, "6");
+		gpuErrchk(
+				cudaMemcpy(curGenerationOnGPU, curGenerationLocal,
+						populationSizeInBytes, cudaMemcpyHostToDevice));
+		fprintf(stdout, "7");
 	}
 
-	return curGenerationLocal;
+	*/
 
 }
 
-void makeFirstIndividuals (Individual *population,int poulationSize, int chromosomeLength)
+void makeFirstIndividuals(Individual *population, int poulationSize,
+		int chromosomeLength)
 {
 	for (int i = 0; i < poulationSize; ++i)
-		{
+	{
 		population[i].fitness = -1;
 		population[i].id = i;
-			for (int j = 0; j < chromosomeLength; j++)
-			{
-				struct coord2D *s = (struct coord2D *) malloc (sizeof (struct coord2D));
-
-				population[i].chromosome[j].x = j;
-				population[i].chromosome[j].x = 0;
-			}
-
+		for (int j = 0; j < chromosomeLength; j++)
+		{
+			population[i].chromosome[j].x = j;
+			population[i].chromosome[j].y = 0;
 		}
+
+	}
 }
 int main(void)
 {
@@ -193,39 +206,53 @@ int main(void)
 	int chromosomeLength = 128;
 	int poulationSize = 10;
 
-
 	size_t individualSizeInBytes = sizeof(struct Individual);
 	size_t populationSizeInBytes = individualSizeInBytes * poulationSize;
 
 	struct Individual *h_I = (struct Individual *) malloc(
-			populationSizeInBytes);
+			populationSizeInBytes );
 
-// Verify that allocations succeeded
+
 	if (h_I == NULL)
 	{
 		fprintf(stderr, "Failed to allocate host vectors!\n");
 		exit(EXIT_FAILURE);
 	}
+	printf("allocated population size of %ul", populationSizeInBytes);
+
 
 	fprintf(stdout, "Allocated %d individuals for a population size of %lu\n",
 			poulationSize, (unsigned long) populationSizeInBytes);
 
-
 // Initialize the host input vectors
-	makeFirstIndividuals (h_I, poulationSize, chromosomeLength);
-
+	makeFirstIndividuals(h_I, poulationSize, chromosomeLength);
 
 	printPopulation(h_I, 3, 10);
+
 // Allocate the device output vector C
 	Individual *d_I = NULL;
-	gpuErrchk(cudaMalloc((void ** ) &d_I, populationSizeInBytes));
+	err = cudaMalloc((void ** ) &d_I, populationSizeInBytes);
+	if (err != cudaSuccess)
+		{
+			fprintf(stderr,
+					"Failed to copy vector C from device to host (error code %s)!\n",
+					cudaGetErrorString(err));
+			exit(EXIT_FAILURE);
+		}
+
 
 // Copy the host input vectors A and B in host memory to the device input vectors in
 // device memory
 	printf("Copy input data from the host memory to the CUDA device\n");
 
-	gpuErrchk(
-			cudaMemcpy(d_I, h_I, populationSizeInBytes, cudaMemcpyHostToDevice));
+	err = cudaMemcpy(d_I, h_I, populationSizeInBytes, cudaMemcpyHostToDevice);
+	if (err != cudaSuccess)
+	{
+		fprintf(stderr,
+				"Failed to copy vector C from device to host (error code %s)!\n",
+				cudaGetErrorString(err));
+		exit(EXIT_FAILURE);
+	}
 
 // Launch the Vector Add CUDA Kernel
 	int threadsPerBlock = 256;
@@ -233,8 +260,14 @@ int main(void)
 	printf("CUDA kernel launch with %d blocks of %d threads\n", blocksPerGrid,
 			threadsPerBlock);
 
+
+	evolve(h_I, d_I, chromosomeLength, poulationSize, populationSizeInBytes,
+			blocksPerGrid, threadsPerBlock, 1);
+
 	initRandomVariableInChromosome<<<blocksPerGrid, threadsPerBlock>>>(time(0),
-			d_I, poulationSize);
+	d_I, poulationSize);
+
+	fprintf(stdout, "2");
 	err = cudaGetLastError();
 
 	if (err != cudaSuccess)
@@ -249,8 +282,9 @@ int main(void)
 			poulationSize);
 	gpuErrchk(cudaGetLastError());
 
-	evolve(h_I, d_I, chromosomeLength, poulationSize, populationSizeInBytes,
-			blocksPerGrid, threadsPerBlock, 1);
+	//evolve(h_I, d_I, chromosomeLength, poulationSize, populationSizeInBytes,
+			//blocksPerGrid, threadsPerBlock, 1);
+
 
 // Copy the device result vector in device memory to the host result vector
 // in host memory.
